@@ -1,0 +1,7 @@
+streamlit
+fpdf
+PyMuPDF
+google-generativeai
+langchain
+sentence-transformers
+torch
