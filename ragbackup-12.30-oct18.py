@@ -3,18 +3,13 @@ import streamlit as st
 import google.generativeai as genai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.schema import Document
+from langchain.embeddings import HuggingFaceEmbeddings
 from fpdf import FPDF
-from sklearn.cluster import KMeans
-from sentence_transformers import SentenceTransformer
-import numpy as np
 
 # 🔐 Gemini setup
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 gemini_model = genai.GenerativeModel("gemini-2.5-flash")
 
-# 🔹 Generate content from Gemini
 def generate_with_gemini(prompt):
     try:
         response = gemini_model.generate_content(prompt)
@@ -22,7 +17,6 @@ def generate_with_gemini(prompt):
     except Exception as e:
         return f"Error generating content: {e}"
 
-# 🔹 Build prompt for content generation
 def build_prompt(level, topic):
     if level == "Basic":
         return f"""
@@ -52,7 +46,6 @@ Provide:
 Use precise terminology and assume the learner has prior exposure to AI concepts.
 """
 
-# 🔹 Load PDFs and extract text
 def load_pdfs(uploaded_files):
     all_text = []
     for uploaded_file in uploaded_files:
@@ -67,60 +60,14 @@ def load_pdfs(uploaded_files):
             print(f"Error processing file: {e}")
     return all_text
 
-# 🔹 Extract subtopics using Gemini synthesis
-def extract_subtopics(chunks, level="Basic", top_n=15):
-    context = "\n\n".join(chunks[:3])
-    prompt = f"""
-You are an AI educator designing a learning module for Indian students.
-
-Here are some excerpts from a teacher-uploaded document:
-{context}
-
-List {top_n} meaningful subtopics suitable for {level} learners.
-Use clear, focused titles. Avoid jargon for Basic level.
-"""
-    try:
-        response = gemini_model.generate_content(prompt)
-        return [line.strip("-• ").strip() for line in response.text.split("\n") if line.strip()]
-    except Exception as e:
-        return ["Untitled Topic"]
-
-# 🔹 Cluster subtopics by semantic similarity
-def cluster_subtopics(subtopics, n_clusters=3):
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    embeddings = model.encode(subtopics)
-
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    labels = kmeans.fit_predict(embeddings)
-
-    clusters = {}
-    for label, topic in zip(labels, subtopics):
-        clusters.setdefault(label, []).append(topic)
-
-    return clusters
-
-# 🔹 Auto-name each cluster using Gemini
-def name_cluster(topics):
-    prompt = f"Suggest a short theme name for these subtopics: {topics}"
-    try:
-        response = gemini_model.generate_content(prompt)
-        return response.text.strip().split("\n")[0]
-    except Exception:
-        return "Unnamed Theme"
-
-# 🔹 Create FAISS index and return named clusters
-def create_vector_db(chunks, level="Basic"):
-    docs = [Document(page_content=chunk) for chunk in chunks]
+def create_vector_db(text_chunks):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    docs = splitter.create_documents(text_chunks)
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    faiss_index = FAISS.from_documents(docs, embeddings)
+    return FAISS.from_documents(docs, embeddings)
 
-    subtopics = extract_subtopics(chunks, level=level)
-    raw_clusters = cluster_subtopics(subtopics, n_clusters=3)
-    named_clusters = {name_cluster(topics): topics for topics in raw_clusters.values()}
+from fpdf import FPDF
 
-    return faiss_index, named_clusters
-
-# 🔹 Export generated content to PDF
 def export_to_pdf(text, filename="output.pdf"):
     def clean_text(s):
         return (

@@ -3,5 +3,9 @@ fpdf
 PyMuPDF
 google-generativeai
 langchain
+langchain-community
+faiss-cpu
 sentence-transformers
 torch
+streamlit-authenticator
+st-gsheets-connection

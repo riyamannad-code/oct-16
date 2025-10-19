@@ -1,7 +1,0 @@
-streamlit
-PyMuPDF
-google-generativeai
-sentence-transformers
-langchain
-langchain-community
-faiss-cpu

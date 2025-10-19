@@ -3,6 +3,8 @@ import bcrypt
 import gspread
 import pandas as pd
 from datetime import datetime
+import re
+import json
 from oauth2client.service_account import ServiceAccountCredentials
 from rag_engine import (
     load_pdfs,
@@ -94,10 +96,11 @@ if role == "Student":
 #-------------
 
 
-import re
-from datetime import datetime
-
 if "student" in st.session_state:
+    # ✅ Initialize session state keys if missing
+    for key in ["quiz_questions", "quiz_attempts", "show_quiz"]:
+        if key not in st.session_state:
+            st.session_state[key] = None if key == "quiz_questions" else []
     
     # Helper to sanitize filenames
     def sanitize_filename(name):
@@ -137,74 +140,14 @@ if "student" in st.session_state:
             st.markdown("⬇️ PDF will appear here after generation")
 
     with col3:
-        quiz_clicked = st.button("Take Quiz", key="quiz_btn")
+        quiz_enabled = "generated_content" in st.session_state
+        quiz_clicked = st.button("Take Quiz", key="quiz_btn", disabled=not quiz_enabled)
+
+        if quiz_clicked:
+            st.session_state["quiz_triggered"] = True
 
 
-##    if st.session_state.get("show_quiz"):
-##        st.subheader("📝 Quiz Time!")
-##        user_answers = []
-##
-##        for i, q in enumerate(st.session_state["quiz_questions"]):
-##            st.markdown(f"**Q{i+1}. {q['question']}**")
-##            selected = st.radio(
-##                f"Choose your answer:",
-##                q["options"],
-##                key=f"quiz_q{i}"
-##            )
-##            user_answers.append(selected)
-##
-##        if st.button("Submit Quiz", key="submit_btn"):
-##            score = 0
-##            results = []
-##            for i, q in enumerate(st.session_state["quiz_questions"]):
-##                correct = q["options"][q["answer"]]
-##                user_ans = user_answers[i]
-##                is_correct = user_ans == correct
-##                results.append((i+1, user_ans, correct, is_correct))
-##                if is_correct:
-##                    score += 1
-##
-##            st.session_state["quiz_attempts"].append(score)
-##            st.session_state["show_quiz"] = False
-##
-##            # Display results
-##            st.subheader("📊 Results")
-##            for q_num, user_ans, correct_ans, is_correct in results:
-##                if is_correct:
-##                    st.success(f"Q{q_num}: ✅ Correct")
-##                else:
-##                    st.error(f"Q{q_num}: ❌ Incorrect — You chose '{user_ans}', correct answer is '{correct_ans}'")
-##
-##            st.markdown(f"### 🏆 Your Score: {score} / {len(st.session_state['quiz_questions'])}")
-##
-##            # Log to Google Sheets
-##            try:
-##                score_sheet = client.open("masaiproject").worksheet("quiz_scores")
-##                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-##                score_row = [
-##                    st.session_state["student"],
-##                    selected_subtopic,
-##                    level,
-##                    score,
-##                    now
-##                ]
-##                score_sheet.append_row(score_row, value_input_option="USER_ENTERED")
-##                st.success("✅ Your score has been logged!")
-##            except Exception as e:
-##                st.error(f"❌ Failed to log score: {e}")
-##
-##            # Show attempt history
-##            if len(st.session_state["quiz_attempts"]) > 1:
-##                st.subheader("📈 Attempt History")
-##                scores_df = pd.DataFrame({
-##                    "Attempt": list(range(1, len(st.session_state["quiz_attempts"]) + 1)),
-##                    "Score": st.session_state["quiz_attempts"]
-##                })
-##                st.line_chart(scores_df.set_index("Attempt"))
-##
-##
-##        
-    
+
     # Handle content generation
 
     #def build_quiz_prompt(topic, level):
@@ -213,55 +156,20 @@ if "student" in st.session_state:
     def build_quiz_prompt(topic, level):
         return f"""
         Create a 5-question multiple-choice quiz for Indian students on the topic '{topic}' at a {level.lower()} level.
-        Each question should be a dictionary with:
-        - 'question': the question text
-        - 'options': a list of 4 options
-        - 'answer': the index (0–3) of the correct option
+        Format each question like this:
+        1. Question text
+        A) Option A
+        B) Option B
+        C) Option C
+        D) Option D
+        Answer: B
 
-        Return ONLY a JSON array of 5 such dictionaries. Do not include any explanation or formatting.
+        Return only plain text. No JSON, no explanation.
         """
 
     
-    import re
 
-    def parse_quiz_from_text(raw_text):
-        questions = []
-        blocks = re.split(r"\n(?=\d+\.\s)", raw_text.strip())  # Split by numbered questions
-
-        for block in blocks:
-            lines = block.strip().split("\n")
-            if len(lines) < 3:
-                continue
-
-            # Extract question
-            q_match = re.match(r"\d+\.\s*(.*)", lines[0])
-            question = q_match.group(1).strip() if q_match else lines[0].strip()
-
-            # Extract options
-            options = []
-            for line in lines[1:]:
-                opt_match = re.match(r"[A-Da-d][\).:-]?\s*(.+)", line.strip())
-                if opt_match:
-                    options.append(opt_match.group(1).strip())
-
-            # Extract answer
-            answer_line = next((l for l in lines if "answer" in l.lower()), "")
-            ans_match = re.search(r"answer\s*[:\-]?\s*([A-Da-d])", answer_line, re.IGNORECASE)
-            if ans_match:
-                answer_letter = ans_match.group(1).upper()
-                answer_index = ord(answer_letter) - ord("A")
-            else:
-                answer_index = 0  # fallback to first option
-
-            if question and len(options) >= 2:
-                questions.append({
-                    "question": question,
-                    "options": options,
-                    "answer": answer_index
-                })
-
-        return questions
-
+    
     #content generation
     if generate_clicked:
         query = build_prompt(level, selected_subtopic)
@@ -281,20 +189,100 @@ if "student" in st.session_state:
         # ✅ Auto-generate quiz based on topic and level
         quiz_prompt = build_quiz_prompt(selected_subtopic, level)
         quiz_raw = generate_with_gemini(quiz_prompt)
-        st.text_area("📄 Gemini Raw Quiz Output", quiz_raw, height=300)
+        #st.text_area("📄 Gemini Raw Quiz Output", quiz_raw, height=300)
+
+        
+        def parse_quiz_from_text(raw_text):
+            questions = []
+            blocks = re.split(r"\n(?=\d+\.\s)", raw_text.strip())  # Split by numbered questions
+
+            for block in blocks:
+                lines = block.strip().split("\n")
+                if len(lines) < 3:
+                    continue
+
+                # Extract question
+                q_match = re.match(r"\d+\.\s*(.*)", lines[0])
+                question = q_match.group(1).strip() if q_match else lines[0].strip()
+
+                # Extract options
+                options = []
+                for line in lines[1:]:
+                    opt_match = re.match(r"[A-Da-d][\).:-]?\s*(.+)", line.strip())
+                    if opt_match:
+                        options.append(opt_match.group(1).strip())
+
+                # Extract answer
+                answer_line = next((l for l in lines if "answer" in l.lower()), "")
+                ans_match = re.search(r"answer\s*[:\-]?\s*([A-Da-d])", answer_line, re.IGNORECASE)
+                if ans_match:
+                    answer_letter = ans_match.group(1).upper()
+                    answer_index = ord(answer_letter) - ord("A")
+                else:
+                    answer_index = 0  # fallback to first option
+
+                if question and len(options) >= 2:
+                    questions.append({
+                        "question": question,
+                        "options": options,
+                        "answer": answer_index
+                    })
+
+            return questions
+
+
+   
+
+        def parse_gemini_quiz(quiz_raw):
+            try:
+                # Step 1: If it's a string, try decoding outer quotes
+                if isinstance(quiz_raw, str):
+                    quiz_raw = quiz_raw.strip()
+                    # If it's double-encoded (starts and ends with quotes), decode once
+                    if quiz_raw.startswith('"') and quiz_raw.endswith('"'):
+                        quiz_raw = json.loads(quiz_raw)
+
+                # Step 2: Try parsing as JSON
+                parsed_quiz = json.loads(quiz_raw) if isinstance(quiz_raw, str) else quiz_raw
+
+                # Step 3: Validate structure
+                valid_quiz = []
+                for q in parsed_quiz:
+                    if (
+                        isinstance(q, dict)
+                        and "question" in q
+                        and "options" in q
+                        and isinstance(q["options"], list)
+                        and len(q["options"]) == 4
+                        and "answer" in q
+                        and isinstance(q["answer"], int)
+                        and 0 <= q["answer"] < 4
+                    ):
+                        valid_quiz.append(q)
+
+                return valid_quiz if valid_quiz else None
+
+            except Exception as e:
+                return None
+
+       
+        #parsed_quiz = parse_gemini_quiz(quiz_raw)
+
+        #if not parsed_quiz:
         parsed_quiz = parse_quiz_from_text(quiz_raw)
+
         if parsed_quiz:
             st.session_state["quiz_questions"] = parsed_quiz
             st.session_state["quiz_attempts"] = []
             st.session_state["show_quiz"] = True
         else:
-            st.error("⚠️ Could not parse quiz. Please check the format.")
+            st.error("❌ Could not parse quiz. Please check Gemini output.")
+            st.text_area("📄 Gemini Raw Quiz Output", str(quiz_raw), height=300)
 
 
-        if st.session_state.get("show_quiz"):
+        if st.session_state.get("show_quiz") and st.session_state.get("quiz_questions"):
             st.subheader("📝 Quiz Time!")
             user_answers = []
-
             for i, q in enumerate(st.session_state["quiz_questions"]):
                 st.markdown(f"**Q{i+1}. {q['question']}**")
                 selected = st.radio(
@@ -317,6 +305,7 @@ if "student" in st.session_state:
 
                 st.session_state["quiz_attempts"].append(score)
                 st.session_state["show_quiz"] = False
+                st.session_state["last_score"] = score
 
                 st.subheader("📊 Results")
                 for q_num, user_ans, correct_ans, is_correct in results:
@@ -326,22 +315,9 @@ if "student" in st.session_state:
                         st.error(f"Q{q_num}: ❌ Incorrect — You chose '{user_ans}', correct answer is '{correct_ans}'")
 
                 st.markdown(f"### 🏆 Your Score: {score} / {len(st.session_state['quiz_questions'])}")
-            
-#--------------
 
-
-
-##                # Display results
-##            st.subheader("📊 Results")
-##            for q_num, user_ans, correct_ans, is_correct in results:
-##                if is_correct:
-##                    st.success(f"Q{q_num}: ✅ Correct")
-##                else:
-##                    st.error(f"Q{q_num}: ❌ Incorrect — You chose '{user_ans}', correct answer is '{correct_ans}'")
-##
-##            st.markdown(f"### 🏆 Your Score: {score} / {len(st.session_state['quiz_questions'])}")
-
-            # Log to Google Sheets
+        
+                # Log to Google Sheets
                 try:
                     score_sheet = client.open("masaiproject").worksheet("quiz_scores")
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -357,14 +333,25 @@ if "student" in st.session_state:
                 except Exception as e:
                     st.error(f"❌ Failed to log score: {e}")
 
-                # Show attempt history
-                if len(st.session_state["quiz_attempts"]) > 1:
-                    st.subheader("📈 Attempt History")
-                    scores_df = pd.DataFrame({
-                        "Attempt": list(range(1, len(st.session_state["quiz_attempts"]) + 1)),
-                        "Score": st.session_state["quiz_attempts"]
-                    })
-                    st.line_chart(scores_df.set_index("Attempt"))
+##now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+##score_sheet.append_row([
+##    st.session_state["student"],
+##    selected_subtopic,
+##    level,
+##    st.session_state["last_score"],
+##    now
+##], value_input_option="USER_ENTERED")
+
+            
+
+        # Show attempt history
+        if len(st.session_state["quiz_attempts"]) > 1:
+            st.subheader("📈 Attempt History")
+            scores_df = pd.DataFrame({
+                "Attempt": list(range(1, len(st.session_state["quiz_attempts"]) + 1)),
+                "Score": st.session_state["quiz_attempts"]
+            })
+            st.line_chart(scores_df.set_index("Attempt"))
 
 ##
 
